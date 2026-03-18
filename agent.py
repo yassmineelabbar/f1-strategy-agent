@@ -1,8 +1,8 @@
 import json
 import requests
+import os
 import fastf1
 from groq import Groq
-import os
 
 os.makedirs('./f1_cache', exist_ok=True)
 fastf1.Cache.enable_cache('./f1_cache')
@@ -16,7 +16,10 @@ When asked a strategy question:
 3. Give a clear recommendation with your reasoning
 
 Always be specific: name the driver, the lap, the compound, and the expected outcome.
-Think like an actual F1 engineer — decisive, data-driven, concise."""
+Think like an actual F1 engineer — decisive, data-driven, concise.
+
+You have memory of the full conversation so far. If the user refers to a driver,
+race, or situation mentioned earlier, use that context."""
 
 
 # ── Tool functions ─────────────────────────────────────────────────────────────
@@ -182,17 +185,19 @@ TOOLS_SCHEMA = [
 
 # ── Agent loop ─────────────────────────────────────────────────────────────────
 
-def run_strategy_agent(question: str, api_key: str):
+def run_strategy_agent(question: str, api_key: str, history: list = None):
     """
-    Runs the agent and yields (type, content) tuples so the UI
-    can display tool calls and the final answer progressively.
+    Runs the agent and yields (type, content) tuples.
+    history: list of previous messages to continue the conversation.
     type is one of: 'tool_call', 'tool_result', 'answer', 'error'
     """
     client = Groq(api_key=api_key)
-    messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": question}
-    ]
+
+    # Build messages: system prompt + full history + new question
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    if history:
+        messages.extend(history)
+    messages.append({"role": "user", "content": question})
 
     for _ in range(6):
         try:
@@ -211,7 +216,10 @@ def run_strategy_agent(question: str, api_key: str):
         messages.append(msg)
 
         if not msg.tool_calls:
+            # Yield the final answer and the updated full history
+            # (minus the system prompt — we add that back next time)
             yield ('answer', msg.content)
+            yield ('history', messages[1:])  # strip system prompt before returning
             return
 
         for tc in msg.tool_calls:
