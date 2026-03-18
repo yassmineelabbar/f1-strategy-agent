@@ -420,6 +420,9 @@ def run_strategy_agent(question: str, api_key: str, history: list = None):
                 tools=TOOLS_SCHEMA,
                 tool_choice="auto",
                 parallel_tool_calls=False,
+                temperature=0,
+                max_tokens=1024,
+                
             )
         except Exception as e:
             yield ('error', str(e))
