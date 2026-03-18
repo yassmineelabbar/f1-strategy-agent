@@ -281,29 +281,44 @@ def get_live_stints(session_key: int, driver_number: int) -> str:
     return "\n".join(lines)
 def get_latest_race_info() -> str:
     """
-    Returns the most recent F1 race session AND its current standings in one call.
+    Returns the most recently completed F1 race AND its standings in one call.
     Use this whenever the user asks about the current race, latest session,
     most recent race, or current standings without specifying a year or race name.
-    This is the only tool needed for 'latest' or 'current' queries.
     """
+    from datetime import datetime, timezone
+
     resp = requests.get(
         f"{OPENF1_BASE}/sessions",
         params={"session_name": "Race"},
         timeout=10
     ).json()
 
-    # Guard against unexpected API responses
     if not resp or not isinstance(resp, list):
         return f"OpenF1 API returned unexpected data: {str(resp)[:200]}"
 
-    latest = resp[-1]
-    if not isinstance(latest, dict):
-        return f"OpenF1 session data malformed: {str(latest)[:200]}"
+    # Filter to sessions that have already started (date_start <= now)
+    now = datetime.now(timezone.utc)
+    past_sessions = []
+    for s in resp:
+        if not isinstance(s, dict):
+            continue
+        date_str = s.get("date_start", "")
+        try:
+            session_dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+            if session_dt <= now:
+                past_sessions.append(s)
+        except Exception:
+            continue
 
+    if not past_sessions:
+        return "No completed sessions found."
+
+    # Most recent completed session
+    latest = past_sessions[-1]
     session_key = latest.get('session_key')
 
     result = (
-        f"Most recent session: {latest.get('location')} {latest.get('year')} — "
+        f"Most recent completed session: {latest.get('location')} {latest.get('year')} — "
         f"{latest.get('session_name')}\n"
         f"Session key: {session_key}\n"
         f"Date: {latest.get('date_start', 'unknown')}\n"
@@ -313,6 +328,7 @@ def get_latest_race_info() -> str:
     if not session_key:
         return result + "Could not fetch standings — no session key."
 
+    # Fetch drivers
     drivers_resp = requests.get(
         f"{OPENF1_BASE}/drivers",
         params={"session_key": session_key},
@@ -329,6 +345,7 @@ def get_latest_race_info() -> str:
             for d in drivers_resp if isinstance(d, dict)
         }
 
+    # Fetch positions
     positions_resp = requests.get(
         f"{OPENF1_BASE}/position",
         params={"session_key": session_key},
@@ -341,17 +358,17 @@ def get_latest_race_info() -> str:
             if not isinstance(p, dict):
                 continue
             dn = p.get("driver_number")
-            if dn and (dn not in latest_pos or p.get("date","") > latest_pos[dn].get("date","")):
+            if dn and (dn not in latest_pos or p.get("date", "") > latest_pos[dn].get("date", "")):
                 latest_pos[dn] = p
 
         sorted_pos = sorted(latest_pos.values(), key=lambda x: x.get("position", 99))
-        result += "Standings:\n"
+        result += "Final standings:\n"
         for p in sorted_pos[:10]:
             dn = p["driver_number"]
             info = driver_map.get(dn, {"code": str(dn), "team": "?"})
             result += f"P{p['position']} — {info['code']} ({info['team']})\n"
     else:
-        result += f"Standings unavailable — API returned: {str(positions_resp)[:200]}"
+        result += f"Standings unavailable: {str(positions_resp)[:150]}"
 
     return result
 
