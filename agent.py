@@ -279,11 +279,12 @@ def get_live_stints(session_key: int, driver_number: int) -> str:
         )
 
     return "\n".join(lines)
-def get_latest_session() -> str:
+def get_latest_race_info() -> str:
     """
-    Returns the most recent F1 session available in OpenF1.
-    Use this when the user asks about 'the current race', 'latest session',
-    or 'most recent race' without specifying a year or race name.
+    Returns the most recent F1 race session AND its current standings in one call.
+    Use this whenever the user asks about the current race, latest session,
+    most recent race, or current standings without specifying a year or race name.
+    This is the only tool needed for 'latest' or 'current' queries.
     """
     resp = requests.get(
         f"{OPENF1_BASE}/sessions",
@@ -295,13 +296,52 @@ def get_latest_session() -> str:
         return "No sessions found."
 
     latest = resp[-1]
-    return (
+    session_key = latest.get('session_key')
+
+    result = (
         f"Most recent session: {latest.get('location')} {latest.get('year')} — "
         f"{latest.get('session_name')}\n"
-        f"Session key: {latest.get('session_key')}\n"
+        f"Session key: {session_key}\n"
         f"Date: {latest.get('date_start', 'unknown')}\n"
-        f"Circuit: {latest.get('circuit_short_name')}"
+        f"Circuit: {latest.get('circuit_short_name')}\n\n"
     )
+
+    # Fetch standings immediately — no second tool call needed
+    drivers_resp = requests.get(
+        f"{OPENF1_BASE}/drivers",
+        params={"session_key": session_key},
+        timeout=10
+    ).json()
+
+    driver_map = {
+        d["driver_number"]: {
+            "code": d.get("name_acronym", "???"),
+            "team": d.get("team_name", "?"),
+        }
+        for d in drivers_resp
+    } if drivers_resp else {}
+
+    positions_resp = requests.get(
+        f"{OPENF1_BASE}/position",
+        params={"session_key": session_key},
+        timeout=10
+    ).json()
+
+    if positions_resp:
+        latest_pos = {}
+        for p in positions_resp:
+            dn = p["driver_number"]
+            if dn not in latest_pos or p["date"] > latest_pos[dn]["date"]:
+                latest_pos[dn] = p
+
+        sorted_pos = sorted(latest_pos.values(), key=lambda x: x.get("position", 99))
+        result += "Standings:\n"
+        for p in sorted_pos[:10]:
+            dn = p["driver_number"]
+            info = driver_map.get(dn, {"code": str(dn), "team": "?"})
+            result += f"P{p['position']} — {info['code']} ({info['team']})\n"
+
+    return result
 
 # ── Tool registry ──────────────────────────────────────────────────────────────
 
@@ -313,7 +353,7 @@ TOOL_FUNCTIONS = {
     "get_openf1_session": get_openf1_session,
     "get_live_standings": get_live_standings,
     "get_live_stints": get_live_stints,
-    "get_latest_session": get_latest_session,
+    "get_latest_race_info": get_latest_race_info,
 }
 
 TOOLS_SCHEMA = [
@@ -428,14 +468,14 @@ TOOLS_SCHEMA = [
     {
     "type": "function",
     "function": {
-        "name": "get_latest_session",
-        "description": "Returns the most recent F1 race session from OpenF1. Use this when the user asks about the current race, latest session, or most recent race without specifying a year or race name. Always prefer this over get_openf1_session for 'latest' or 'current' queries.",
+        "name": "get_latest_race_info",
+        "description": "Returns the most recent F1 race session AND its current standings in a single call. Use this for ANY query about the current race, latest session, most recent race, or current standings. Do NOT use get_openf1_session or get_live_standings for 'latest' queries — always use this instead.",
         "parameters": {
             "type": "object",
             "properties": {},
             "required": []
            }
-       }
+        }
     },
 ]
 
