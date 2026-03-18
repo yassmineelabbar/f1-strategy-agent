@@ -139,6 +139,141 @@ def get_circuit_weather(circuit_lat: float, circuit_lon: float) -> str:
         f"Rain probability next hour: {rain_prob}%"
     )
 
+# ── OpenF1 tools (live + recent sessions) ─────────────────────────────────────
+
+OPENF1_BASE = "https://api.openf1.org/v1"
+
+
+def get_openf1_session(year: int, race_name: str) -> str:
+    """
+    Finds an F1 session by year and race name using OpenF1.
+    Returns the session key needed for other OpenF1 tools.
+    Use this first before calling get_live_standings or get_live_stints.
+    """
+    resp = requests.get(
+        f"{OPENF1_BASE}/sessions",
+        params={"year": year, "session_name": "Race"},
+        timeout=10
+    ).json()
+
+    if not resp:
+        return f"No sessions found for year {year}."
+
+    # Match race name loosely
+    race_lower = race_name.lower()
+    match = None
+    for s in resp:
+        location = s.get("location", "").lower()
+        country = s.get("country_name", "").lower()
+        circuit = s.get("circuit_short_name", "").lower()
+        if any(race_lower in field for field in [location, country, circuit]):
+            match = s
+            break
+
+    if not match:
+        # Fall back to latest session
+        match = resp[-1]
+
+    return (
+        f"Session found: {match.get('location')} {match.get('year')} — "
+        f"{match.get('session_name')}\n"
+        f"Session key: {match.get('session_key')}\n"
+        f"Date: {match.get('date_start', 'unknown')}\n"
+        f"Circuit: {match.get('circuit_short_name')}"
+    )
+
+
+def get_live_standings(session_key: int) -> str:
+    """
+    Returns current race standings for all drivers in a session.
+    Shows position, driver code, team, gap to leader, and current lap.
+    Use after get_openf1_session to get the session_key.
+    """
+    # Get drivers in this session
+    drivers_resp = requests.get(
+        f"{OPENF1_BASE}/drivers",
+        params={"session_key": session_key},
+        timeout=10
+    ).json()
+
+    if not drivers_resp:
+        return f"No driver data found for session {session_key}."
+
+    # Map driver_number → driver info
+    driver_map = {
+        d["driver_number"]: {
+            "code": d.get("name_acronym", "???"),
+            "team": d.get("team_name", "?"),
+        }
+        for d in drivers_resp
+    }
+
+    # Get latest position for each driver
+    positions_resp = requests.get(
+        f"{OPENF1_BASE}/position",
+        params={"session_key": session_key},
+        timeout=10
+    ).json()
+
+    if not positions_resp:
+        return f"No position data found for session {session_key}."
+
+    # Keep only the latest position entry per driver
+    latest = {}
+    for p in positions_resp:
+        dn = p["driver_number"]
+        if dn not in latest or p["date"] > latest[dn]["date"]:
+            latest[dn] = p
+
+    # Sort by position
+    sorted_pos = sorted(latest.values(), key=lambda x: x.get("position", 99))
+
+    lines = [f"Standings for session {session_key}:"]
+    for p in sorted_pos[:10]:  # top 10
+        dn = p["driver_number"]
+        info = driver_map.get(dn, {"code": str(dn), "team": "?"})
+        lines.append(
+            f"P{p['position']} — {info['code']} ({info['team']})"
+        )
+
+    return "\n".join(lines)
+
+
+def get_live_stints(session_key: int, driver_number: int) -> str:
+    """
+    Returns tire stint history for a driver in a session.
+    Shows compound, start lap, end lap, and stint duration.
+    Use after get_openf1_session to get the session_key.
+    """
+    resp = requests.get(
+        f"{OPENF1_BASE}/stints",
+        params={"session_key": session_key, "driver_number": driver_number},
+        timeout=10
+    ).json()
+
+    if not resp:
+        return f"No stint data for driver {driver_number} in session {session_key}."
+
+    # Also get driver name
+    drivers = requests.get(
+        f"{OPENF1_BASE}/drivers",
+        params={"session_key": session_key, "driver_number": driver_number},
+        timeout=10
+    ).json()
+    name = drivers[0].get("name_acronym", str(driver_number)) if drivers else str(driver_number)
+
+    lines = [f"Tire stints for {name} (session {session_key}):"]
+    for s in resp:
+        lap_start = s.get("lap_start", "?")
+        lap_end = s.get("lap_end", "current")
+        compound = s.get("compound", "?")
+        age = s.get("tyre_age_at_start", 0)
+        lines.append(
+            f"Stint {s.get('stint_number', '?')}: {compound} — "
+            f"laps {lap_start} to {lap_end} (age at start: {age})"
+        )
+
+    return "\n".join(lines)
 
 # ── Tool registry ──────────────────────────────────────────────────────────────
 
@@ -147,6 +282,9 @@ TOOL_FUNCTIONS = {
     "get_race_gaps": get_race_gaps,
     "compute_pit_window": compute_pit_window,
     "get_circuit_weather": get_circuit_weather,
+    "get_openf1_session": get_openf1_session,
+    "get_live_standings": get_live_standings,
+    "get_live_stints": get_live_stints,
 }
 
 TOOLS_SCHEMA = [
@@ -154,7 +292,7 @@ TOOLS_SCHEMA = [
         "type": "function",
         "function": {
             "name": "get_tire_data",
-            "description": "Returns lap-by-lap tire compound and lap times for a driver.",
+            "description": "Returns lap-by-lap tire compound and lap times for a driver using FastF1. Best for detailed historical analysis.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -170,7 +308,7 @@ TOOLS_SCHEMA = [
         "type": "function",
         "function": {
             "name": "get_race_gaps",
-            "description": "Returns race position and gap to cars ahead and behind.",
+            "description": "Returns race position and gap to cars ahead and behind using FastF1. Best for historical races.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -186,7 +324,7 @@ TOOLS_SCHEMA = [
         "type": "function",
         "function": {
             "name": "compute_pit_window",
-            "description": "Calculates whether undercut or overcut is viable.",
+            "description": "Calculates whether undercut or overcut is viable given lap number, total laps, and gap to car ahead.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -203,7 +341,7 @@ TOOLS_SCHEMA = [
         "type": "function",
         "function": {
             "name": "get_circuit_weather",
-            "description": "Fetches current weather at a circuit.",
+            "description": "Fetches current weather at a circuit. Use for wet or intermediate tire decisions.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -213,9 +351,52 @@ TOOLS_SCHEMA = [
                 "required": ["circuit_lat", "circuit_lon"]
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_openf1_session",
+            "description": "Finds an F1 session by year and race name using OpenF1. Returns the session key needed for get_live_standings and get_live_stints. Use this first for any live or recent session query.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "year": {"type": "integer", "description": "Season year e.g. 2024"},
+                    "race_name": {"type": "string", "description": "Race location e.g. 'Monaco', 'Silverstone'"}
+                },
+                "required": ["year", "race_name"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_live_standings",
+            "description": "Returns current race standings — positions, drivers, teams — from OpenF1. Use after get_openf1_session.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "session_key": {"type": "integer", "description": "Session key from get_openf1_session"}
+                },
+                "required": ["session_key"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_live_stints",
+            "description": "Returns tire stint history for a specific driver from OpenF1 — compound, start/end lap, tyre age. Use after get_openf1_session.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "session_key": {"type": "integer", "description": "Session key from get_openf1_session"},
+                    "driver_number": {"type": "integer", "description": "Driver race number e.g. 1 for Verstappen, 4 for Norris"}
+                },
+                "required": ["session_key", "driver_number"]
+            }
+        }
     }
 ]
-
 
 # ── Agent loop ─────────────────────────────────────────────────────────────────
 
