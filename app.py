@@ -210,15 +210,3 @@ if question:
 # ── Footer ─────────────────────────────────────────────────────────────────────
 st.divider()
 st.caption("Data via FastF1 & OpenF1 · Model: Llama 3.3 70B on Groq · Built by yassmineelabbar")
-```
-
----
-
-## Updated `requirements.txt`
-```
-fastf1
-groq
-requests
-streamlit
-plotly
-pandas
