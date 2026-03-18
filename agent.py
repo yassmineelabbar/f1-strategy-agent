@@ -292,10 +292,14 @@ def get_latest_race_info() -> str:
         timeout=10
     ).json()
 
-    if not resp:
-        return "No sessions found."
+    # Guard against unexpected API responses
+    if not resp or not isinstance(resp, list):
+        return f"OpenF1 API returned unexpected data: {str(resp)[:200]}"
 
     latest = resp[-1]
+    if not isinstance(latest, dict):
+        return f"OpenF1 session data malformed: {str(latest)[:200]}"
+
     session_key = latest.get('session_key')
 
     result = (
@@ -306,20 +310,24 @@ def get_latest_race_info() -> str:
         f"Circuit: {latest.get('circuit_short_name')}\n\n"
     )
 
-    # Fetch standings immediately — no second tool call needed
+    if not session_key:
+        return result + "Could not fetch standings — no session key."
+
     drivers_resp = requests.get(
         f"{OPENF1_BASE}/drivers",
         params={"session_key": session_key},
         timeout=10
     ).json()
 
-    driver_map = {
-        d["driver_number"]: {
-            "code": d.get("name_acronym", "???"),
-            "team": d.get("team_name", "?"),
+    driver_map = {}
+    if isinstance(drivers_resp, list):
+        driver_map = {
+            d["driver_number"]: {
+                "code": d.get("name_acronym", "???"),
+                "team": d.get("team_name", "?"),
+            }
+            for d in drivers_resp if isinstance(d, dict)
         }
-        for d in drivers_resp
-    } if drivers_resp else {}
 
     positions_resp = requests.get(
         f"{OPENF1_BASE}/position",
@@ -327,11 +335,13 @@ def get_latest_race_info() -> str:
         timeout=10
     ).json()
 
-    if positions_resp:
+    if isinstance(positions_resp, list) and positions_resp:
         latest_pos = {}
         for p in positions_resp:
-            dn = p["driver_number"]
-            if dn not in latest_pos or p["date"] > latest_pos[dn]["date"]:
+            if not isinstance(p, dict):
+                continue
+            dn = p.get("driver_number")
+            if dn and (dn not in latest_pos or p.get("date","") > latest_pos[dn].get("date","")):
                 latest_pos[dn] = p
 
         sorted_pos = sorted(latest_pos.values(), key=lambda x: x.get("position", 99))
@@ -340,6 +350,8 @@ def get_latest_race_info() -> str:
             dn = p["driver_number"]
             info = driver_map.get(dn, {"code": str(dn), "team": "?"})
             result += f"P{p['position']} — {info['code']} ({info['team']})\n"
+    else:
+        result += f"Standings unavailable — API returned: {str(positions_resp)[:200]}"
 
     return result
 
