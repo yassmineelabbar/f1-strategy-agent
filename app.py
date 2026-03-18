@@ -120,4 +120,4 @@ if question:
 
 # ── Footer ─────────────────────────────────────────────────────────────────────
 st.divider()
-st.caption("Data via FastF1 & OpenF1 · Model: Llama 3.3 70B on Groq · Built by you")
+st.caption("Data via FastF1 & OpenF1 · Model: Llama 3.3 70B on Groq · Built by yassmineelabbar")
