@@ -26,10 +26,6 @@ if "display" not in st.session_state:
 
 # ── Chart builder ──────────────────────────────────────────────────────────────
 def build_lap_chart(charts: list) -> go.Figure:
-    """
-    Takes a list of chart_data dicts (one per driver) and returns
-    a Plotly figure with lap times colored by tire compound.
-    """
     fig = go.Figure()
 
     for chart in charts:
@@ -38,13 +34,16 @@ def build_lap_chart(charts: list) -> go.Figure:
         if not laps:
             continue
 
-        # Group consecutive laps by compound to draw colored segments
+        seen = set()  # ← lives here, resets per driver
         current_compound = None
         seg_laps, seg_times = [], []
 
         def flush_segment():
             if seg_laps and current_compound:
                 color = COMPOUND_COLORS.get(current_compound.upper(), "#888888")
+                legend_key = f"{driver}_{current_compound}"
+                show_in_legend = legend_key not in seen
+                seen.add(legend_key)
                 fig.add_trace(go.Scatter(
                     x=seg_laps,
                     y=seg_times,
@@ -54,6 +53,7 @@ def build_lap_chart(charts: list) -> go.Figure:
                     marker=dict(size=5, color=color,
                                 line=dict(width=1, color='#333')),
                     legendgroup=driver,
+                    showlegend=show_in_legend,
                     hovertemplate=(
                         f"<b>{driver}</b><br>"
                         "Lap %{x}<br>"
@@ -79,10 +79,7 @@ def build_lap_chart(charts: list) -> go.Figure:
     year = charts[0]['year'] if charts else ""
 
     fig.update_layout(
-        title=dict(
-            text=f"{race} {year} — Lap times by compound",
-            font=dict(size=14)
-        ),
+        title=dict(text=f"{race} {year} — Lap times by compound", font=dict(size=14)),
         xaxis=dict(title="Lap", showgrid=True, gridcolor='rgba(255,255,255,0.1)'),
         yaxis=dict(title="Lap time (s)", showgrid=True, gridcolor='rgba(255,255,255,0.1)'),
         plot_bgcolor='rgba(0,0,0,0)',
@@ -93,7 +90,6 @@ def build_lap_chart(charts: list) -> go.Figure:
         height=340,
     )
     return fig
-
 
 # ── Header ─────────────────────────────────────────────────────────────────────
 st.title("🏎️ F1 Strategy Agent")
