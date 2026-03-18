@@ -20,7 +20,12 @@ Always be specific: name the driver, the lap, the compound, and the expected out
 Think like an actual F1 engineer — decisive, data-driven, concise.
 
 You have memory of the full conversation so far. If the user refers to a driver,
-race, or situation mentioned earlier, use that context."""
+race, or situation mentioned earlier, use that context.
+
+Tool routing rules:
+- If the user mentions 'latest', 'current', 'most recent', or 'now' → use get_latest_session first.
+- If the user specifies a year and race name → use get_openf1_session.
+- Never assume the current year is 2024. The actual current year is 2026."""
 
 
 # ── Compound colors (official F1 palette) ─────────────────────────────────────
@@ -274,6 +279,29 @@ def get_live_stints(session_key: int, driver_number: int) -> str:
         )
 
     return "\n".join(lines)
+def get_latest_session() -> str:
+    """
+    Returns the most recent F1 session available in OpenF1.
+    Use this when the user asks about 'the current race', 'latest session',
+    or 'most recent race' without specifying a year or race name.
+    """
+    resp = requests.get(
+        f"{OPENF1_BASE}/sessions",
+        params={"session_name": "Race"},
+        timeout=10
+    ).json()
+
+    if not resp:
+        return "No sessions found."
+
+    latest = resp[-1]
+    return (
+        f"Most recent session: {latest.get('location')} {latest.get('year')} — "
+        f"{latest.get('session_name')}\n"
+        f"Session key: {latest.get('session_key')}\n"
+        f"Date: {latest.get('date_start', 'unknown')}\n"
+        f"Circuit: {latest.get('circuit_short_name')}"
+    )
 
 # ── Tool registry ──────────────────────────────────────────────────────────────
 
@@ -285,6 +313,7 @@ TOOL_FUNCTIONS = {
     "get_openf1_session": get_openf1_session,
     "get_live_standings": get_live_standings,
     "get_live_stints": get_live_stints,
+    "get_latest_session": get_latest_session,
 }
 
 TOOLS_SCHEMA = [
@@ -395,7 +424,19 @@ TOOLS_SCHEMA = [
                 "required": ["session_key", "driver_number"]
             }
         }
-    }
+    },
+    {
+    "type": "function",
+    "function": {
+        "name": "get_latest_session",
+        "description": "Returns the most recent F1 race session from OpenF1. Use this when the user asks about the current race, latest session, or most recent race without specifying a year or race name. Always prefer this over get_openf1_session for 'latest' or 'current' queries.",
+        "parameters": {
+            "type": "object",
+            "properties": {},
+            "required": []
+           }
+       }
+    },
 ]
 
 # ── Agent loop ─────────────────────────────────────────────────────────────────
