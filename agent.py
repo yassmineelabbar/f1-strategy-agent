@@ -2,7 +2,9 @@ import json
 import requests
 import fastf1
 from groq import Groq
+import os
 
+os.makedirs('./f1_cache', exist_ok=True)
 fastf1.Cache.enable_cache('./f1_cache')
 
 SYSTEM_PROMPT = """You are a Formula 1 strategy engineer working on the pit wall.
