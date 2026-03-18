@@ -479,7 +479,7 @@ def run_strategy_agent(question: str, api_key: str, history: list = None):
 
         for tc in msg.tool_calls:
             fn_name = tc.function.name
-            fn_args = json.loads(tc.function.arguments)
+            fn_args = json.loads(tc.function.arguments) if tc.function.arguments else {}
 
             yield ('tool_call', f"{fn_name}({fn_args})")
 
