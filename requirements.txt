@@ -1,0 +1,4 @@
+fastf1
+groq
+requests
+streamlit
