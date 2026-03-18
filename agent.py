@@ -2,6 +2,7 @@ import json
 import requests
 import os
 import fastf1
+import pandas as pd
 from groq import Groq
 
 os.makedirs('./f1_cache', exist_ok=True)
@@ -22,23 +23,56 @@ You have memory of the full conversation so far. If the user refers to a driver,
 race, or situation mentioned earlier, use that context."""
 
 
+# ── Compound colors (official F1 palette) ─────────────────────────────────────
+COMPOUND_COLORS = {
+    "SOFT":        "#E8002D",
+    "MEDIUM":      "#FFF200",
+    "HARD":        "#FFFFFF",
+    "INTERMEDIATE":"#39B54A",
+    "WET":         "#0067FF",
+    "UNKNOWN":     "#888888",
+}
+
+
 # ── Tool functions ─────────────────────────────────────────────────────────────
 
-def get_tire_data(year: int, race_name: str, driver_code: str) -> str:
-    """Returns lap-by-lap tire compound and lap time for a driver."""
+def _load_driver_laps(year: int, race_name: str, driver_code: str) -> pd.DataFrame:
+    """Shared helper — loads and returns cleaned lap DataFrame for a driver."""
     session = fastf1.get_session(year, race_name, 'R')
     session.load(telemetry=False, weather=False, messages=False)
-    driver_laps = session.laps.pick_driver(driver_code)[
+    laps = session.laps.pick_driver(driver_code)[
         ['LapNumber', 'Compound', 'LapTime', 'TyreLife']
-    ].dropna(subset=['LapTime'])
+    ].dropna(subset=['LapTime']).copy()
+    laps['LapTimeSec'] = laps['LapTime'].dt.total_seconds()
+    laps['Driver'] = driver_code
+    return laps
+
+
+def get_tire_data(year: int, race_name: str, driver_code: str) -> str:
+    """Returns lap-by-lap tire compound and lap time for a driver.
+    Used to assess current tire age and degradation rate."""
+    laps = _load_driver_laps(year, race_name, driver_code)
     lines = []
-    for _, row in driver_laps.iterrows():
-        lap_s = row['LapTime'].total_seconds()
+    for _, row in laps.iterrows():
         lines.append(
             f"Lap {int(row['LapNumber'])}: {row['Compound']} "
-            f"(age {int(row['TyreLife'])} laps) — {lap_s:.3f}s"
+            f"(age {int(row['TyreLife'])} laps) — {row['LapTimeSec']:.3f}s"
         )
     return f"Tire data for {driver_code}:\n" + "\n".join(lines[-20:])
+
+
+def get_chart_data(year: int, race_name: str, driver_code: str) -> dict:
+    """
+    Returns chart-ready lap data for a driver.
+    Called alongside get_tire_data to generate the Plotly chart.
+    """
+    laps = _load_driver_laps(year, race_name, driver_code)
+    return {
+        "driver": driver_code,
+        "race": race_name,
+        "year": year,
+        "laps": laps[['LapNumber', 'LapTimeSec', 'Compound', 'TyreLife']].to_dict('records')
+    }
 
 
 def get_race_gaps(year: int, race_name: str, driver_code: str) -> str:
@@ -188,12 +222,10 @@ TOOLS_SCHEMA = [
 def run_strategy_agent(question: str, api_key: str, history: list = None):
     """
     Runs the agent and yields (type, content) tuples.
-    history: list of previous messages to continue the conversation.
-    type is one of: 'tool_call', 'tool_result', 'answer', 'error'
+    Types: 'tool_call', 'tool_result', 'chart', 'answer', 'history', 'error'
     """
     client = Groq(api_key=api_key)
 
-    # Build messages: system prompt + full history + new question
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
     if history:
         messages.extend(history)
@@ -216,10 +248,8 @@ def run_strategy_agent(question: str, api_key: str, history: list = None):
         messages.append(msg)
 
         if not msg.tool_calls:
-            # Yield the final answer and the updated full history
-            # (minus the system prompt — we add that back next time)
             yield ('answer', msg.content)
-            yield ('history', messages[1:])  # strip system prompt before returning
+            yield ('history', messages[1:])
             return
 
         for tc in msg.tool_calls:
@@ -233,12 +263,20 @@ def run_strategy_agent(question: str, api_key: str, history: list = None):
             except Exception as e:
                 result = f"Tool error: {str(e)}"
 
-            yield ('tool_result', result)
+            # Whenever tire data is fetched, also generate chart data
+            if fn_name == "get_tire_data" and "Tool error" not in str(result):
+                try:
+                    chart_data = get_chart_data(**fn_args)
+                    yield ('chart', chart_data)
+                except Exception:
+                    pass  # chart failing should never break the agent
+
+            yield ('tool_result', str(result)[:300])
 
             messages.append({
                 "role": "tool",
                 "tool_call_id": tc.id,
-                "content": result
+                "content": str(result)
             })
 
     yield ('error', "Agent reached max iterations without a final answer.")
